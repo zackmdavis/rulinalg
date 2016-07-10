@@ -684,6 +684,47 @@ impl<T: Any + Float + Signed> Matrix<T> {
             _ => self.francis_shift_eigendecomp(),
         }
     }
+
+    /// Singular value decomposition.
+    pub fn singular_value_decomp(&self) -> Result<(Matrix<T>, Matrix<T>, Matrix<T>), Error> {
+        let ata = self.transpose() * self;
+
+        // XXX TODO FIXME: it looks like this is taking an unreasonably long
+        // amount of time to converge?! What's going on??
+        let (ata_eigenvals, ata_eigvecs) = try!(ata.eigendecomp());
+
+        // (index, √λ) pairs (indices being order of return from `.eigendecomp`)
+        let mut enumerated_singular_vals = ata_eigenvals.iter()
+            .map(|s| s.sqrt())
+            .enumerate()
+            .collect::<Vec<_>>();
+
+        enumerated_singular_vals
+            // ... in descending order by singular value
+            .sort_by(|a, b| b.1.partial_cmp(&a.1).expect("NaN is uncomparable"));
+
+        // Pluck out the eigenvectors in the corresponding order
+        let v = enumerated_singular_vals.iter()
+            .map(|&(i, _sigma)| ata_eigvecs.select_cols(&[i]))
+            .map(|v| { let n = v.norm(); v/n })
+            .fold(Matrix::new(ata.rows(), 0, Vec::new()),
+                  |vs, vi| vs.hcat(&vi));
+
+        let singular_vals = enumerated_singular_vals.iter()
+            .map(|&(_, sigma)| sigma)
+            .collect::<Vec<_>>();
+
+        // u₁ = 1/σ₁ Av₁, &c ...
+        let u = singular_vals.iter()
+            .enumerate()
+            // column iterators (rusty-machine issue #52) could make this less awkward
+            .map(|(i, sigma)| self * T::one()/sigma * v.select_cols(&[i]))
+            .fold(Matrix::new(v.rows(), 0, Vec::new()),
+                  |us, ui| us.hcat(&ui));
+
+        Ok((u, Matrix::from_diag(&singular_vals[..]), v.transpose()))
+    }
+
 }
 
 
@@ -864,6 +905,26 @@ mod tests {
         assert!(eigs.iter().any(|x| (x - eig_4).abs() < 1e-4));
         assert!(eigs.iter().any(|x| (x - eig_5).abs() < 1e-4));
     }
+
+    #[test]
+    fn test_singular_value_decomp() {
+        // little example matrix from Otto Bretscher's _Linear Algebra with
+        // Applications_, 3rd ed'n., §8.3 example 5
+        let a = Matrix::new(2, 3, vec![0f32, 1., 1.,
+                                       1., 1., 0.]);
+
+        let (u, sigma, vt) = a.singular_value_decomp()
+            .expect("singular value decomposition unexpectedly failed");
+
+        // TODO: actual assertions (print-and-assert-false is just to debug
+        // without `-- --nocapture`)
+
+        println!("{}\n", u);
+        println!("{}\n", sigma);
+        println!("{}\n", vt);
+        assert!(false);
+    }
+
 
     #[test]
     #[should_panic]
